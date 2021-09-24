@@ -70,14 +70,15 @@ for i, (img, points) in enumerate(zip((target, source), (target_points, source_p
 plt.savefig('triangulation.jpg')
 
 
-def computeAffine(tri1_pts, tri2_pts):
-    def trans(points):
-        v1 = np.reshape((points[1] - points[0]), (2, 1))
-        v2 = np.reshape((points[2] - points[0]), (2, 1))
-        mat = np.hstack([v1, v2, np.resize(points[0], (2, 1))])
-        mat = np.vstack([mat, np.array([[0, 0, 1]])])
-        return mat
+def trans(points):
+    vector1 = np.reshape((points[1] - points[0]), (2, 1))
+    vector2 = np.reshape((points[2] - points[0]), (2, 1))
+    origin = np.reshape(points[0], (2, 1))
+    upper_matrix = np.hstack([vector1, vector2, origin])
+    trans_matrix = np.vstack([upper_matrix, np.array([[0, 0, 1]])])
+    return trans_matrix
 
+def computeAffine(tri1_pts, tri2_pts):
     return np.dot(trans(tri2_pts), np.linalg.inv(trans(tri1_pts)))
 
 
