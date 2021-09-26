@@ -1,25 +1,17 @@
-import numpy as np
-import matplotlib
 import matplotlib.animation as animation
 import matplotlib.pyplot as plt
-import skimage as sk
-import skimage.io as skio
-import skimage.data as data
 import skimage.transform as sktr
 from skimage.draw import polygon
 from scipy.spatial import Delaunay
-import os
-import glob
+import skimage as sk
 import numpy as np
-import cv2
-import pdb
-import time
-from sklearn.decomposition import PCA
-from sklearn.neighbors import KDTree
-import sys
+import os
+
 
 
 IMG_SHAPE = (750, 600)
+WIDTH = IMG_SHAPE[0]
+LENGTH = IMG_SHAPE[1]
 NUM_POINTS = 33
 
 def define_points(num_points, image):
@@ -29,11 +21,14 @@ def define_points(num_points, image):
     plt.close()
     return points
 
+
 # read img
 target = plt.imread('depp.jpg')
 source = plt.imread('me.jpg')
 target = sk.transform.resize(target, IMG_SHAPE)
 source = sk.transform.resize(source, IMG_SHAPE)
+
+
 # select points
 if os.path.exists('target_points.npy'):
     target_points = np.load('target_points.npy')
@@ -46,6 +41,7 @@ else:
     np.save("source_points.npy", source_points)
 
 
+# get the real matrix
 corners = np.array([
     [0, 0],
     [IMG_SHAPE[1]-1, 0],
@@ -74,36 +70,38 @@ def trans(points):
     vector1 = np.reshape((points[1] - points[0]), (2, 1))
     vector2 = np.reshape((points[2] - points[0]), (2, 1))
     origin = np.reshape(points[0], (2, 1))
+
     upper_matrix = np.hstack([vector1, vector2, origin])
     trans_matrix = np.vstack([upper_matrix, np.array([[0, 0, 1]])])
     return trans_matrix
+
 
 def computeAffine(tri1_pts, tri2_pts):
     return np.dot(trans(tri2_pts), np.linalg.inv(trans(tri1_pts)))
 
 
-def compute_masks(target, source, target_points, source_points, triangulation, warp_frac, dissolve_frac):
-    if warp_frac < 0 or warp_frac > 1 or dissolve_frac < 0 or dissolve_frac > 1:
-        return None
+def find_basis(points, index, basis_mat, mid_tri):
+    tri = points[index]
+    trans_mat = np.linalg.inv(computeAffine(tri, mid_tri))
+    new_basis = np.dot(trans_mat, basis_mat).astype(int)
+    return new_basis
 
-    masks = [np.zeros((IMG_SHAPE[0], IMG_SHAPE[1], 3)) for _ in range(3)]
+
+def compute_masks(target, source, target_points, source_points, triangulation, warp_frac, dissolve_frac):
+    masks = [np.zeros((WIDTH, LENGTH, 3)) for _ in range(3)]
     mid_pts = source_points + warp_frac * (target_points - source_points)
 
     for tri_index in triangulation.simplices:
         mid_tri = mid_pts[tri_index]
-        rr, cc = polygon(mid_tri[:, 0], mid_tri[:, 1])
-        mid_xys = np.array([rr, cc])
-        tmp = np.vstack([mid_xys, np.ones((1, mid_xys.shape[1]))])
+        v1, v2 = polygon(mid_tri[:, 0], mid_tri[:, 1])
+        mid_basis = np.array([v1, v2])
+        basis_mat = np.vstack([mid_basis, np.ones((1, mid_basis.shape[1]))])
 
-        src1_tri = target_points[tri_index]
-        mat_T1 = np.linalg.inv(computeAffine(src1_tri, mid_tri))
-        src1_xys = np.dot(mat_T1, tmp).astype(int)
-        masks[0][mid_xys[1], mid_xys[0]] = target[src1_xys[1], src1_xys[0]]
+        tgt_basis = find_basis(target_points, tri_index, basis_mat, mid_tri)
+        masks[0][mid_basis[1], mid_basis[0]] = target[tgt_basis[1], tgt_basis[0]]
 
-        src2_tri = source_points[tri_index]
-        mat_T2 = np.linalg.inv(computeAffine(src2_tri, mid_tri))
-        src2_xys = np.dot(mat_T2, tmp).astype(int)
-        masks[2][mid_xys[1], mid_xys[0]] = source[src2_xys[1], src2_xys[0]]
+        src_basis = find_basis(source_points, tri_index, basis_mat, mid_tri)
+        masks[2][mid_basis[1], mid_basis[0]] = source[src_basis[1], src_basis[0]]
 
     masks[1] = masks[2] + dissolve_frac * (masks[0] - masks[2])
     return masks
@@ -116,16 +114,13 @@ for i in range(3):
     plt.imshow(masks[i])
 plt.savefig('midway_face.jpg')
 
-NUM_FRAMES = 45
-
-def morph(im1, im2, pts1, pts2, tri, warp_frac, dissolve_frac):
-    return compute_masks(target, source, target_points, source_points, triangulation, x, x)[1]
 
 # generate morphing
+NUM_FRAMES = 45
 results = []
 fig = plt.figure(figsize=(8, 10))
 for x in np.linspace(0, 1, NUM_FRAMES):
-    img = morph(target, source, target_points, source_points, triangulation, x, x)
+    img = compute_masks(target, source, target_points, source_points, triangulation, x, x)[1]
     img = plt.imshow(img, animated=True)
     results.append([img])
 
