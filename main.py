@@ -14,7 +14,8 @@ WIDTH = IMG_SHAPE[0]
 LENGTH = IMG_SHAPE[1]
 NUM_POINTS = 33
 
-def define_points(num_points, image):
+
+def select_points(num_points, image):
     plt.imshow(image)
     print("Select %d points." % num_points)
     points = np.array(plt.ginput(num_points, timeout=0))
@@ -34,8 +35,8 @@ if os.path.exists('target_points.npy'):
     target_points = np.load('target_points.npy')
     source_points = np.load('source_points.npy')
 else:
-    target_points = define_points(NUM_POINTS, target)
-    source_points = define_points(NUM_POINTS, source)
+    target_points = select_points(NUM_POINTS, target)
+    source_points = select_points(NUM_POINTS, source)
     # save points
     np.save("target_points.npy", target_points)
     np.save("source_points.npy", source_points)
@@ -43,16 +44,14 @@ else:
 
 # get the real matrix
 corners = np.array([
-    [0, 0],
-    [IMG_SHAPE[1]-1, 0],
-    [0, IMG_SHAPE[0]-1],
-    [IMG_SHAPE[1]-1, IMG_SHAPE[0]-1]
+    [0, 0], [LENGTH - 1, 0],
+    [0, WIDTH - 1], [LENGTH - 1, WIDTH-1]
 ])
 target_points = np.vstack([target_points, corners])
 source_points = np.vstack([source_points, corners])
 
 
-# triangulation
+# calculate triangulation
 mid_points = (target_points + source_points)/2
 triangulation = Delaunay(mid_points)
 
@@ -65,7 +64,7 @@ for i, (img, points) in enumerate(zip((target, source), (target_points, source_p
 
 plt.savefig('triangulation.jpg')
 
-
+# find the trans matrix
 def trans(points):
     vector1 = np.reshape((points[1] - points[0]), (2, 1))
     vector2 = np.reshape((points[2] - points[0]), (2, 1))
@@ -91,16 +90,16 @@ def compute_masks(target, source, target_points, source_points, triangulation, w
     masks = [np.zeros((WIDTH, LENGTH, 3)) for _ in range(3)]
     mid_pts = source_points + warp_frac * (target_points - source_points)
 
-    for tri_index in triangulation.simplices:
-        mid_tri = mid_pts[tri_index]
+    for index in triangulation.simplices:
+        mid_tri = mid_pts[index]
         v1, v2 = polygon(mid_tri[:, 0], mid_tri[:, 1])
         mid_basis = np.array([v1, v2])
         basis_mat = np.vstack([mid_basis, np.ones((1, mid_basis.shape[1]))])
 
-        tgt_basis = find_basis(target_points, tri_index, basis_mat, mid_tri)
+        tgt_basis = find_basis(target_points, index, basis_mat, mid_tri)
         masks[0][mid_basis[1], mid_basis[0]] = target[tgt_basis[1], tgt_basis[0]]
 
-        src_basis = find_basis(source_points, tri_index, basis_mat, mid_tri)
+        src_basis = find_basis(source_points, index, basis_mat, mid_tri)
         masks[2][mid_basis[1], mid_basis[0]] = source[src_basis[1], src_basis[0]]
 
     masks[1] = masks[2] + dissolve_frac * (masks[0] - masks[2])
@@ -108,23 +107,23 @@ def compute_masks(target, source, target_points, source_points, triangulation, w
 
 
 plt.figure(figsize=(15, 5))
-masks = compute_masks(target, source, target_points, source_points, triangulation, 0.5, 0.5)
+mid_faces = compute_masks(target, source, target_points, source_points, triangulation, 0.5, 0.5)
 for i in range(3):
     plt.subplot(1, 3, i + 1)
-    plt.imshow(masks[i])
-plt.savefig('midway_face.jpg')
+    plt.imshow(mid_faces[i])
+plt.savefig('mid_face.jpg')
 
 
-# generate morphing
+# generate morphing sequence
 NUM_FRAMES = 45
 results = []
 fig = plt.figure(figsize=(8, 10))
-for x in np.linspace(0, 1, NUM_FRAMES):
-    img = compute_masks(target, source, target_points, source_points, triangulation, x, x)[1]
+for frac in np.linspace(0, 1, NUM_FRAMES):
+    img = compute_masks(target, source, target_points, source_points, triangulation, frac, frac)[1]
     img = plt.imshow(img, animated=True)
     results.append([img])
 
-# generate animation and save
+# generate gif
 vid = animation.ArtistAnimation(
     fig,
     results,
@@ -132,35 +131,33 @@ vid = animation.ArtistAnimation(
     blit=True,
     repeat_delay=1000
 )
-vid.save('morphing.gif', fps=30)
-vid.save('morphing_slowmo.gif', fps=10)
+vid.save('morphing.gif', fps=20)
+vid.save('morphing_slow.gif', fps=10)
 
 
-
-
-
-
-# mean of a population
-
+# calculate mean of a population
 DIR = 'DB'
+img1 = plt.imread('DB/01-1m.jpg')
+W = img1.shape[0]
+L = img1.shape[1]
+corners = np.array([
+    [0, 0], [L-1, 0],
+    [0, W-1], [L-1, W-1]
+])
 
-def get_pts_from_file(filename, pad=True):
-    im = plt.imread('DB/01-1m.jpg')
 
+# get the points from dataset files
+def get_points(filename):
     data = open(filename, 'r').readlines()[16:74]
     data = [l.split('\t')[2:4] for l in data]
     relative_points = np.array(data).astype(float)
 
-    real_points = np.multiply(np.array([im.shape[1], im.shape[0]]), relative_points)
-    if pad:
-        corners = np.array([
-            [0, 0],
-            [im.shape[1]-1, 0], [0, im.shape[0]-1],
-            [im.shape[1]-1, im.shape[0]-1]
-        ])
-        real_points = np.vstack([real_points, corners])
+    real_points = np.multiply(np.array([L, W]), relative_points)
+    real_points = np.vstack([real_points, corners])
     return real_points
 
+
+# load all images with given keyword
 def load_imgs(keyword):
     images = []
     points = []
@@ -168,7 +165,7 @@ def load_imgs(keyword):
         basename, ext = os.path.splitext(filename)
         if keyword in basename and ext == '.jpg':
             images.append(plt.imread(os.path.join(DIR, filename)) / 255.)
-            pts = get_pts_from_file(os.path.join(DIR, basename + '.asf'))
+            pts = get_points(os.path.join(DIR, basename + '.asf'))
             points.append(pts)
     return images, points
 
@@ -192,7 +189,7 @@ def get_mean_face(images, pts):
 
     return result, mean_pts
 
-keywords = ['1m', '2m', '1f', '2f']
+keywords = ['5m', '2m', '5f', '2f']
 images = []
 points = []
 mean_faces = []
@@ -204,15 +201,14 @@ for i, keyword in enumerate(keywords):
 
     mean_face, mean_pts = get_mean_face(imgs, pts)
     mean_faces.append(mean_face)
-
     mean_points.append(mean_pts)
 
 # plot average faces
 titles = [
-    'average face of neutral males',
-    'average face of happy males',
-    'average face of neutral females',
-    'average face of happy females'
+    'average males',
+    'average smiling male',
+    'average females',
+    'average smiling female'
 ]
 plt.figure(figsize=(20, 16))
 for i in range(4):
@@ -237,6 +233,7 @@ def compute_warp(img_src, points_src, points_tgt, a=1.):
     points_mean = points_src + (points_tgt - points_src) / 2
     points_tgt = points_src + (points_tgt - points_src) * a
     triangulation = Delaunay(points_mean)
+    
     result = np.zeros((img_src.shape[0], img_src.shape[1], 3))
     for index in triangulation.simplices:
         triangle_tgt = points_tgt[index]
@@ -254,10 +251,10 @@ def compute_warp(img_src, points_src, points_tgt, a=1.):
 
 PID = 0
 titles = [
-    'neutral male',
-    'happy male',
-    'neutral female',
-    'happy female'
+    'male',
+    'smiling male',
+    'female',
+    'smiling female'
 ]
 plt.figure(figsize=(32, 10))
 for i in range(4):
@@ -270,6 +267,7 @@ for i in range(4):
     img = compute_warp(images[i][PID], points[i][PID], mean_points[i])
     plt.imshow(img)
 plt.savefig('DB/warp_to_mean.jpg')
+
 
 cropped_mean_faces = []
 cropped_mean_points = []
@@ -287,13 +285,14 @@ for face, pts in zip(mean_faces, mean_points):
     cropped_mean_faces.append(cropped_face)
     cropped_mean_points.append(cropped_points)
 
+
 # get coordinates
-img_source = sk.transform.resize(plt.imread('me.jpg'), cropped_mean_faces[0].shape)
+img_source = sk.transform.resize(plt.imread('me2.jpg'), cropped_mean_faces[0].shape)
 
 if os.path.exists('source_points_58.npy'):
     source_points = np.load('source_points_58.npy')
 else:
-    source_points = define_points(58, img_source)
+    source_points = select_points(58, img_source)
     padding = np.array([
         [0, 0],
         [img_source.shape[1] - 1, 0],
@@ -316,6 +315,6 @@ for i in range(4):
     plt.title(titles[i] + ' to me')
     img_from_avg = compute_warp(cropped_mean_faces[i], cropped_mean_points[i], source_points)
     plt.imshow(img_from_avg)
-plt.savefig('me_vs_avg.jpg')
+plt.savefig('warp_my_face.jpg')
 
 
